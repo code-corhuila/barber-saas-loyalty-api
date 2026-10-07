@@ -71,6 +71,26 @@ abstract class HttpTest {
         }
     }
 
+    /**
+     * Confirms every pending outbox event, as the worker would, so a test that looks for its own event
+     * finds it in the first page however many the other test classes left in the shared repository.
+     */
+    void drainOutbox(com.fasterxml.jackson.databind.ObjectMapper json, String worker) throws Exception {
+        while (true) {
+            var pending = json.readTree(http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                    .get("/internal/v1/outbox-events").param("limit", "100").header("Authorization", worker))
+                    .andReturn().getResponse().getContentAsString()).get("data");
+            if (pending.isEmpty()) {
+                return;
+            }
+            for (var e : pending) {
+                http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/internal/v1/outbox-events/" + e.get("id").asText() + "/published")
+                        .header("Authorization", worker));
+            }
+        }
+    }
+
     static String bearer(String role, UUID barbershopId) {
         return bearer(UUID.randomUUID(), role, barbershopId);
     }
