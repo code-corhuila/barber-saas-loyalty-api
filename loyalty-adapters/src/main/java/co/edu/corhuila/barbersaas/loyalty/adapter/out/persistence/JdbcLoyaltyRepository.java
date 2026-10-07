@@ -6,6 +6,7 @@ import co.edu.corhuila.barbersaas.loyalty.application.port.out.Idempotency.KeyTa
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxEvent;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxStore;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.ProcessedEvents;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.CouponStatus;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyTransaction;
@@ -35,7 +36,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * checks them, so chk_loyalty_card_counts and uq_loyalty_transaction_sticker_per_appointment are the
  * final guarantees against concurrent requests.
  */
-public class JdbcLoyaltyRepository implements LoyaltyRepository, OutboxStore {
+public class JdbcLoyaltyRepository implements LoyaltyRepository, OutboxStore, ProcessedEvents {
 
     private static final String CONFIG = "id, barbershop_id, stickers_required, reward_description, is_active";
     private static final String CARD = "id, barbershop_id, client_id, stickers_count, total_rewards_redeemed, last_updated";
@@ -157,18 +158,46 @@ public class JdbcLoyaltyRepository implements LoyaltyRepository, OutboxStore {
     public LoyaltyCard saveSticker(LoyaltyCard card, boolean newCard, LoyaltyTransaction t, Idempotency.Key key,
                                    OutboxEvent event) {
         write(() -> {
-            if (newCard) {
-                jdbc.update("INSERT INTO loyalty.loyalty_card (" + CARD + ") VALUES (?, ?, ?, ?, ?, ?)", card.id(),
-                        card.barbershopId(), card.clientId(), card.stickersCount(), card.totalRewardsRedeemed(),
-                        Timestamp.from(card.lastUpdated()));
-            } else {
-                jdbc.update("UPDATE loyalty.loyalty_card SET stickers_count = stickers_count + 1, last_updated = ? "
-                        + "WHERE barbershop_id = ? AND id = ?", Timestamp.from(t.createdAt()), card.barbershopId(), card.id());
-            }
-            insert(t);
+            sticker(card, newCard, t);
             if (key != null) {
                 JdbcIdempotency.insert(jdbc, key, t.id());
             }
+            insert(event);
+        });
+        return card(card.barbershopId(), card.id()).orElseThrow();
+    }
+
+    /** Inside the caller's transaction: the card (new, or +1) and the STICKER_EARNED transaction. */
+    private void sticker(LoyaltyCard card, boolean newCard, LoyaltyTransaction t) {
+        if (newCard) {
+            jdbc.update("INSERT INTO loyalty.loyalty_card (" + CARD + ") VALUES (?, ?, ?, ?, ?, ?)", card.id(),
+                    card.barbershopId(), card.clientId(), card.stickersCount(), card.totalRewardsRedeemed(),
+                    Timestamp.from(card.lastUpdated()));
+        } else {
+            jdbc.update("UPDATE loyalty.loyalty_card SET stickers_count = stickers_count + 1, last_updated = ? "
+                    + "WHERE barbershop_id = ? AND id = ?", Timestamp.from(t.createdAt()), card.barbershopId(), card.id());
+        }
+        insert(t);
+    }
+
+    @Override
+    public boolean isProcessed(UUID eventId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM loyalty.processed_event WHERE event_id = ?)", Boolean.class, eventId));
+    }
+
+    @Override
+    public void markProcessed(UUID eventId, String eventType) {
+        jdbc.update("INSERT INTO loyalty.processed_event (event_id, event_type) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                eventId, eventType);
+    }
+
+    @Override
+    public LoyaltyCard saveEventSticker(LoyaltyCard card, boolean newCard, LoyaltyTransaction t, OutboxEvent event,
+                                        UUID eventId, String eventType) {
+        write(() -> {
+            jdbc.update("INSERT INTO loyalty.processed_event (event_id, event_type) VALUES (?, ?)", eventId, eventType);
+            sticker(card, newCard, t);
             insert(event);
         });
         return card(card.barbershopId(), card.id()).orElseThrow();
@@ -247,6 +276,9 @@ public class JdbcLoyaltyRepository implements LoyaltyRepository, OutboxStore {
             }
             if (message.contains("uq_loyalty_card_client_barbershop")) {
                 throw new CardTaken();
+            }
+            if (message.contains("pk_processed_event")) {
+                throw new AlreadyProcessed();
             }
             if (message.contains("pk_idempotency_key")) {
                 throw new KeyTaken();
