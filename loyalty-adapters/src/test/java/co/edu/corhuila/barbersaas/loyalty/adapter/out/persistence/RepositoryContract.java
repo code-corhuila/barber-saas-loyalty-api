@@ -1,0 +1,150 @@
+package co.edu.corhuila.barbersaas.loyalty.adapter.out.persistence;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import co.edu.corhuila.barbersaas.loyalty.application.port.in.Page;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.Idempotency;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.Idempotency.KeyTaken;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository.CardTaken;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository.CouponTaken;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository.NotEnoughStickers;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository.StickerAlreadyGranted;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxEvent;
+import co.edu.corhuila.barbersaas.loyalty.domain.model.CouponStatus;
+import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard;
+import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard.Redemption;
+import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyTransaction;
+import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardsConfig;
+import co.edu.corhuila.barbersaas.loyalty.domain.model.TransactionType;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Map;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+
+/** What every LoyaltyRepository must do, in memory or in PostgreSQL. */
+abstract class RepositoryContract {
+
+    final UUID shop = UUID.randomUUID();
+    final UUID client = UUID.randomUUID();
+    final UUID staff = UUID.randomUUID();
+    final Page.Request page = new Page.Request(1, 10);
+
+    abstract LoyaltyRepository repository();
+
+    Instant now() {
+        return Instant.now().truncatedTo(ChronoUnit.MICROS);
+    }
+
+    Idempotency.Key key(String operation) {
+        return new Idempotency.Key("it-" + UUID.randomUUID(), operation, "hash");
+    }
+
+    OutboxEvent event(LoyaltyCard card, String type) {
+        return new OutboxEvent(UUID.randomUUID(), card.id(), type, Map.of("cardId", card.id().toString()), now());
+    }
+
+    /** One more sticker, opening the card when the client has none yet. */
+    LoyaltyCard sticker(UUID appointmentId) {
+        Instant now = now();
+        var existing = repository().cardOf(shop, client);
+        LoyaltyCard card = existing.orElseGet(() -> LoyaltyCard.open(UUID.randomUUID(), shop, client, now));
+        LoyaltyTransaction t = card.grantSticker(UUID.randomUUID(), appointmentId, staff, now);
+        return repository().saveSticker(card, existing.isEmpty(), t, key("POST /api/v1/loyalty/stickers"),
+                event(card, "StickerGranted"));
+    }
+
+    @Test
+    void theRuleIsOnePerBarbershopAndKeepsItsId() {
+        RewardsConfig rule = new RewardsConfig(UUID.randomUUID(), shop, 10, "Free cut", true);
+        repository().saveConfig(rule);
+        repository().saveConfig(new RewardsConfig(rule.id(), shop, 8, "Free beard", false));
+
+        RewardsConfig read = repository().config(shop).orElseThrow();
+        assertEquals(new RewardsConfig(rule.id(), shop, 8, "Free beard", false), read);
+        assertTrue(repository().config(UUID.randomUUID()).isEmpty());
+    }
+
+    @Test
+    void stickersAddByDeltaAndTheCardIsReadOnlyInItsBarbershop() {
+        UUID appointment = UUID.randomUUID();
+        LoyaltyCard first = sticker(appointment);
+        LoyaltyCard second = sticker(null);
+
+        assertEquals(1, first.stickersCount());
+        assertEquals(2, second.stickersCount());
+        assertEquals(first.id(), repository().cardOf(shop, client).orElseThrow().id());
+        assertTrue(repository().card(UUID.randomUUID(), first.id()).isEmpty(), "another barbershop sees nothing");
+        assertEquals(2, repository().transactions(first.id(), null, page).total());
+        assertEquals(appointment, repository().transactions(first.id(), TransactionType.STICKER_EARNED, page)
+                .items().get(1).appointmentId());
+        assertThrows(StickerAlreadyGranted.class, () -> sticker(appointment));
+        assertEquals(2, repository().cardOf(shop, client).orElseThrow().stickersCount(), "nothing stored");
+    }
+
+    @Test
+    void aSecondCardForTheSameClientIsRefused() {
+        sticker(null);
+        LoyaltyCard twin = LoyaltyCard.open(UUID.randomUUID(), shop, client, now());
+        LoyaltyTransaction t = twin.grantSticker(UUID.randomUUID(), null, staff, now());
+
+        assertThrows(CardTaken.class, () -> repository().saveSticker(twin, true, t, key("op"), event(twin, "x")));
+    }
+
+    @Test
+    void aRedemptionStoresTheCouponAndCannotTakeStickersTwice() {
+        sticker(null);
+        LoyaltyCard card = sticker(null);
+        RewardsConfig rule = new RewardsConfig(UUID.randomUUID(), shop, 2, "Free cut", true);
+        LoyaltyCard stale = LoyaltyCard.restore(card.id(), shop, client, card.stickersCount(), 0, card.lastUpdated());
+        Redemption r = card.redeem(rule, UUID.randomUUID(), UUID.randomUUID(), staff, now());
+
+        LoyaltyCard after = repository().saveRedemption(card, 2, r.transaction(), r.coupon(),
+                key("POST /api/v1/loyalty/redemptions"), event(card, "RewardRedeemed"));
+
+        assertEquals(0, after.stickersCount());
+        assertEquals(1, after.totalRewardsRedeemed());
+        assertEquals(r.transaction().id(), repository().redemptionOf(r.coupon()).orElseThrow().id());
+        assertEquals(CouponStatus.ACTIVE, repository().coupon(shop, r.coupon().id()).orElseThrow().status());
+        assertEquals(1, repository().coupons(shop, client, CouponStatus.ACTIVE, page).total());
+        assertEquals(0, repository().coupons(UUID.randomUUID(), null, null, page).total());
+        Redemption again = stale.redeem(rule, UUID.randomUUID(), UUID.randomUUID(), staff, now());   // read before
+        assertThrows(NotEnoughStickers.class, () -> repository().saveRedemption(stale, 2, again.transaction(),
+                again.coupon(), key("POST /api/v1/loyalty/redemptions"), event(stale, "RewardRedeemed")));
+        assertEquals(1, repository().coupons(shop, null, null, page).total(), "nothing stored");
+    }
+
+    @Test
+    void aCouponIsUsedOnceAndAKeyIsStoredOnce() {
+        LoyaltyCard card = sticker(null);
+        RewardsConfig rule = new RewardsConfig(UUID.randomUUID(), shop, 1, "Free cut", true);
+        Redemption r = card.redeem(rule, UUID.randomUUID(), UUID.randomUUID(), staff, now());
+        Idempotency.Key key = key("POST /api/v1/loyalty/redemptions");
+        repository().saveRedemption(card, 1, r.transaction(), r.coupon(), key, event(card, "RewardRedeemed"));
+        r.coupon().use(UUID.randomUUID(), now());
+
+        repository().saveCouponUse(r.coupon());
+
+        assertEquals(CouponStatus.USED, repository().coupon(shop, r.coupon().id()).orElseThrow().status());
+        assertThrows(CouponTaken.class, () -> repository().saveCouponUse(r.coupon()));
+        assertEquals(r.coupon().id(), repository().findKey(key.key(), key.operation()).orElseThrow().resourceId());
+        LoyaltyTransaction t = card.grantSticker(UUID.randomUUID(), null, staff, now());
+        assertThrows(KeyTaken.class, () -> repository().saveSticker(card, false, t, key, event(card, "x")));
+    }
+
+    @Test
+    void cardsFilterByClientAndByTheThreshold() {
+        sticker(null);
+        sticker(null);
+
+        assertEquals(1, repository().cards(shop, null, true, 2, page).total());
+        assertEquals(0, repository().cards(shop, null, true, 3, page).total());
+        assertEquals(1, repository().cards(shop, null, false, 3, page).total());
+        assertEquals(0, repository().cards(shop, null, true, null, page).total(), "no active rule");
+        assertEquals(1, repository().cards(shop, client, null, null, page).total());
+        assertEquals(0, repository().cards(shop, UUID.randomUUID(), null, null, page).total());
+    }
+}
