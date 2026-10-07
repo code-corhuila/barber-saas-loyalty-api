@@ -23,5 +23,6 @@
 
   <modules>
     <module>loyalty-core</module>
+    <module>loyalty-adapters</module>
   </modules>
 </project>
