@@ -41,7 +41,7 @@ Spring), `loyalty-adapters` (HTTP in and out, JDBC, RS256 validation) and `loyal
 | `GET /api/v1/loyalty/cards/me` | `CLIENT` |
 | `POST /api/v1/loyalty/stickers` · `POST …/redemptions` (`Idempotency-Key` required) | `ADMIN_BARBERSHOP`, `BARBER` |
 | `GET /api/v1/loyalty/coupons?clientId&status`, `GET …/coupons/{id}`, `POST …/coupons/{id}/use` | staff; a client only their own |
-| `GET /internal/v1/outbox-events`, `POST …/{id}/published`, `POST …/{id}/failed` (internal network) | the service token of `barber-saas-worker` only |
+| `POST /internal/v1/events` (an `EventEnvelope`), `GET /internal/v1/outbox-events`, `POST …/{id}/published`, `POST …/{id}/failed` (internal network) | the service token of `barber-saas-worker` only |
 | `GET /health` | liveness, no token |
 
 Rules: a sticker adds one and the card is created with the first (DEC-LOY-03); a manual sticker may
@@ -51,6 +51,13 @@ least its threshold of stickers, and in one transaction subtracts them, records 
 issues one `ACTIVE` coupon (DEC-LOY-02). A coupon is used once, on an appointment of the same
 client. Counts change by deltas, so concurrent requests never lose a sticker nor redeem twice. The
 tenant comes **only** from the token: another barbershop's card or coupon answers `404`.
+
+**The automatic sticker (DEC-LOY-01/05, ADR-016):** the worker delivers `AppointmentCompleted` to
+`POST /internal/v1/events`, at least once. It grants one sticker to the payload's `clientId` in the
+envelope's `barbershopId`, in the name of `completedBy` (who completed the appointment), and writes the
+event's id to `processed_event` in the same transaction. A redelivery, or an appointment that already
+has its sticker, answers `DUPLICATE`; a walk-in or a barbershop without an active program `IGNORED`;
+any other type, or an `AppointmentCompleted` without `completedBy`, `422`. All three outcomes are `200`.
 
 **Events (DEC-LOY-04, ADR-016):** every sticker writes `StickerGranted` and every redemption
 `RewardRedeemed` to `loyalty.outbox_event` in the same transaction; `barber-saas-worker` reads them
@@ -83,7 +90,5 @@ is also tested against a database migrated by `barber-saas-loyalty-db` when `TES
 
 ### What is missing
 
-- **The automatic sticker** (`POST /internal/v1/events` with `AppointmentCompleted`, DEC-LOY-01):
-  waiting for who `grantedByUserId` is (barber-saas-docs#88).
-- `RewardRedeemed` carries `couponId` but no `couponCode` (#88). A client's existence is not
-  checked, and the booking flow's service token cannot use a coupon yet (#88).
+- `completedBy` and the removal of `couponCode` follow barber-saas-docs#91 (pending approval). A
+  client's existence is not checked, and the booking flow's service token cannot use a coupon yet (#88).
