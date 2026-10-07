@@ -5,12 +5,14 @@ import co.edu.corhuila.barbersaas.loyalty.application.port.out.Idempotency;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.Idempotency.KeyTaken;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxEvent;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxStore;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.CouponStatus;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyTransaction;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardCoupon;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardsConfig;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.TransactionType;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -18,12 +20,13 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import org.slf4j.MDC;
 
 /**
  * Used when DATABASE_URL is empty. It stores copies and applies the same deltas and rules as
  * PostgreSQL; writes are synchronized so concurrent requests behave as with the database.
  */
-public class InMemoryLoyaltyRepository implements LoyaltyRepository {
+public class InMemoryLoyaltyRepository implements LoyaltyRepository, OutboxStore {
 
     private final Map<UUID, RewardsConfig> configs = new ConcurrentHashMap<>();
     private final Map<UUID, LoyaltyCard> cards = new ConcurrentHashMap<>();
@@ -31,6 +34,10 @@ public class InMemoryLoyaltyRepository implements LoyaltyRepository {
     private final Map<UUID, RewardCoupon> coupons = new ConcurrentHashMap<>();
     private final Map<String, Idempotency.Stored> keys = new ConcurrentHashMap<>();
     private final List<OutboxEvent> outbox = new CopyOnWriteArrayList<>();
+    /** Per event: its correlation id, and whether it was published or set aside as failed. */
+    private final Map<UUID, Relay> relay = new ConcurrentHashMap<>();
+
+    private record Relay(String correlationId, Instant publishedAt, Instant failedAt, String lastError) { }
 
     @Override
     public Optional<RewardsConfig> config(UUID tenant) {
@@ -121,7 +128,7 @@ public class InMemoryLoyaltyRepository implements LoyaltyRepository {
         cards.put(updated.id(), updated);
         transactions.add(t);
         storeKey(key, t.id());
-        outbox.add(event);
+        append(event);
         return copy(updated);
     }
 
@@ -139,7 +146,7 @@ public class InMemoryLoyaltyRepository implements LoyaltyRepository {
         transactions.add(t);
         coupons.put(coupon.id(), copy(coupon));
         storeKey(key, coupon.id());
-        outbox.add(event);
+        append(event);
         return copy(updated);
     }
 
@@ -149,6 +156,36 @@ public class InMemoryLoyaltyRepository implements LoyaltyRepository {
             throw new CouponTaken();
         }
         coupons.put(coupon.id(), copy(coupon));
+    }
+
+    private void append(OutboxEvent event) {
+        relay.put(event.id(), new Relay(Optional.ofNullable(MDC.get("correlationId")).orElse("none"), null, null, null));
+        outbox.add(event);
+    }
+
+    @Override
+    public List<Stored> pending(int limit) {
+        return outbox.stream().filter(e -> relay.get(e.id()).publishedAt() == null && relay.get(e.id()).failedAt() == null)
+                .sorted(Comparator.comparing(OutboxEvent::occurredAt)).limit(limit)
+                .map(e -> new Stored(e, relay.get(e.id()).correlationId())).toList();
+    }
+
+    @Override
+    public synchronized boolean markPublished(UUID id, Instant now) {
+        Relay r = relay.get(id);
+        if (r != null && r.publishedAt() == null) {
+            relay.put(id, new Relay(r.correlationId(), now, r.failedAt(), r.lastError()));
+        }
+        return r != null;
+    }
+
+    @Override
+    public synchronized boolean markFailed(UUID id, String reason, Instant now) {
+        Relay r = relay.get(id);
+        if (r != null) {
+            relay.put(id, new Relay(r.correlationId(), r.publishedAt(), r.failedAt() == null ? now : r.failedAt(), reason));
+        }
+        return r != null;
     }
 
     /** What would be relayed; only for tests and local runs. */
