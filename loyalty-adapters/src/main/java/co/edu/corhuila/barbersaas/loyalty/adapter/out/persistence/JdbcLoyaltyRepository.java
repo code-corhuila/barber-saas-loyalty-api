@@ -5,6 +5,7 @@ import co.edu.corhuila.barbersaas.loyalty.application.port.out.Idempotency;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.Idempotency.KeyTaken;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxEvent;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxStore;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.CouponStatus;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyTransaction;
@@ -12,12 +13,15 @@ import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardCoupon;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardsConfig;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.TransactionType;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.MDC;
@@ -31,7 +35,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * checks them, so chk_loyalty_card_counts and uq_loyalty_transaction_sticker_per_appointment are the
  * final guarantees against concurrent requests.
  */
-public class JdbcLoyaltyRepository implements LoyaltyRepository {
+public class JdbcLoyaltyRepository implements LoyaltyRepository, OutboxStore {
 
     private static final String CONFIG = "id, barbershop_id, stickers_required, reward_description, is_active";
     private static final String CARD = "id, barbershop_id, client_id, stickers_count, total_rewards_redeemed, last_updated";
@@ -195,6 +199,37 @@ public class JdbcLoyaltyRepository implements LoyaltyRepository {
                 c.barbershopId(), c.id());
         if (changed != 1) {
             throw new CouponTaken();
+        }
+    }
+
+    /** idx_outbox_event_unpublished serves this read: pending only, oldest first (DEC-LOY-04). */
+    @Override
+    public List<Stored> pending(int limit) {
+        return jdbc.query("SELECT id, aggregate_id, event_type, payload::text AS payload, correlation_id, occurred_at "
+                        + "FROM loyalty.outbox_event WHERE published_at IS NULL AND failed_at IS NULL "
+                        + "ORDER BY occurred_at, id LIMIT ?",
+                (rs, n) -> new Stored(new OutboxEvent(rs.getObject("id", UUID.class), rs.getObject("aggregate_id", UUID.class),
+                        rs.getString("event_type"), payload(rs.getString("payload")),
+                        rs.getTimestamp("occurred_at").toInstant()), rs.getString("correlation_id")), limit);
+    }
+
+    @Override
+    public boolean markPublished(UUID id, Instant now) {
+        return jdbc.update("UPDATE loyalty.outbox_event SET published_at = coalesce(published_at, ?) WHERE id = ?",
+                Timestamp.from(now), id) == 1;
+    }
+
+    @Override
+    public boolean markFailed(UUID id, String reason, Instant now) {
+        return jdbc.update("UPDATE loyalty.outbox_event SET failed_at = coalesce(failed_at, ?), last_error = ? WHERE id = ?",
+                Timestamp.from(now), reason, id) == 1;
+    }
+
+    private Map<String, Object> payload(String text) {
+        try {
+            return json.readValue(text, new TypeReference<Map<String, Object>>() { });
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("A stored payload is not JSON", e);
         }
     }
 
