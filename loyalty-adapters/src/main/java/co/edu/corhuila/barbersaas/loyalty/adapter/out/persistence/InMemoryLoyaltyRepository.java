@@ -6,6 +6,7 @@ import co.edu.corhuila.barbersaas.loyalty.application.port.out.Idempotency.KeyTa
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxEvent;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxStore;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.ProcessedEvents;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.CouponStatus;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyTransaction;
@@ -26,13 +27,14 @@ import org.slf4j.MDC;
  * Used when DATABASE_URL is empty. It stores copies and applies the same deltas and rules as
  * PostgreSQL; writes are synchronized so concurrent requests behave as with the database.
  */
-public class InMemoryLoyaltyRepository implements LoyaltyRepository, OutboxStore {
+public class InMemoryLoyaltyRepository implements LoyaltyRepository, OutboxStore, ProcessedEvents {
 
     private final Map<UUID, RewardsConfig> configs = new ConcurrentHashMap<>();
     private final Map<UUID, LoyaltyCard> cards = new ConcurrentHashMap<>();
     private final List<LoyaltyTransaction> transactions = new CopyOnWriteArrayList<>();
     private final Map<UUID, RewardCoupon> coupons = new ConcurrentHashMap<>();
     private final Map<String, Idempotency.Stored> keys = new ConcurrentHashMap<>();
+    private final Map<UUID, String> processedEvents = new ConcurrentHashMap<>();
     private final List<OutboxEvent> outbox = new CopyOnWriteArrayList<>();
     /** Per event: its correlation id, and whether it was published or set aside as failed. */
     private final Map<UUID, Relay> relay = new ConcurrentHashMap<>();
@@ -130,6 +132,27 @@ public class InMemoryLoyaltyRepository implements LoyaltyRepository, OutboxStore
         storeKey(key, t.id());
         append(event);
         return copy(updated);
+    }
+
+    @Override
+    public boolean isProcessed(UUID eventId) {
+        return processedEvents.containsKey(eventId);
+    }
+
+    @Override
+    public void markProcessed(UUID eventId, String eventType) {
+        processedEvents.putIfAbsent(eventId, eventType);
+    }
+
+    @Override
+    public synchronized LoyaltyCard saveEventSticker(LoyaltyCard card, boolean newCard, LoyaltyTransaction t,
+                                                     OutboxEvent event, UUID eventId, String eventType) {
+        if (processedEvents.containsKey(eventId)) {
+            throw new AlreadyProcessed();
+        }
+        LoyaltyCard stored = saveSticker(card, newCard, t, null, event);
+        processedEvents.put(eventId, eventType);
+        return stored;
     }
 
     @Override
