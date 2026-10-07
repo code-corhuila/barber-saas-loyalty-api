@@ -6,6 +6,7 @@ import co.edu.corhuila.barbersaas.loyalty.application.port.out.AppointmentLookup
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.Idempotency;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxEvent;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.ProcessedEvents;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.CouponStatus;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyTransaction;
@@ -14,11 +15,13 @@ import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardsConfig;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.TransactionType;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /** Doubles of every outbound port, in memory. Reads return copies, as a database would. */
@@ -27,13 +30,14 @@ final class Fakes {
     private Fakes() {
     }
 
-    static final class Repository implements LoyaltyRepository {
+    static final class Repository implements LoyaltyRepository, ProcessedEvents {
         final Map<UUID, RewardsConfig> configs = new HashMap<>();
         final Map<UUID, LoyaltyCard> cards = new LinkedHashMap<>();
         final List<LoyaltyTransaction> transactions = new ArrayList<>();
         final Map<UUID, RewardCoupon> coupons = new LinkedHashMap<>();
         final Map<String, Idempotency.Stored> keys = new HashMap<>();
         final List<OutboxEvent> outbox = new ArrayList<>();
+        final Set<UUID> processed = new HashSet<>();
         /** Simulates a concurrent redemption that took the stickers after the card was read. */
         boolean loseTheRedemptionRace;
 
@@ -132,6 +136,27 @@ final class Fakes {
             keys.put(key.key() + " " + key.operation(), new Idempotency.Stored(coupon.id(), key.requestHash()));
             outbox.add(event);
             return copy(card);
+        }
+
+        @Override
+        public boolean isProcessed(UUID eventId) {
+            return processed.contains(eventId);
+        }
+
+        @Override
+        public void markProcessed(UUID eventId, String eventType) {
+            processed.add(eventId);
+        }
+
+        @Override
+        public LoyaltyCard saveEventSticker(LoyaltyCard card, boolean newCard, LoyaltyTransaction t, OutboxEvent event,
+                                           UUID eventId, String eventType) {
+            if (processed.contains(eventId)) {
+                throw new AlreadyProcessed();
+            }
+            LoyaltyCard stored = saveSticker(card, newCard, t, new Idempotency.Key("event-" + eventId, "event", "-"), event);
+            processed.add(eventId);
+            return stored;
         }
 
         @Override
