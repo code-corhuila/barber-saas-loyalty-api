@@ -1,0 +1,33 @@
+server:
+  port: ${PORT:8080}
+  shutdown: graceful            # stop accepting, let in-flight requests finish
+  tomcat:
+    connection-timeout: 5s      # time to receive the request line and headers
+    keep-alive-timeout: 60s
+    threads:
+      max: 200
+spring:
+  application:
+    name: loyalty-api
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+  autoconfigure:
+    # The pool is built in LoyaltyConfiguration (the composition root), not by auto-configuration.
+    exclude: org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+  jackson:
+    # Optional fields absent from the contract's responses are sent as null, never dropped silently.
+    default-property-inclusion: always
+logging:
+  structured:
+    format:
+      console: ecs              # one JSON object per line; the MDC adds correlationId
+loyalty:
+  database:
+    # Empty: in-memory repository. The schema lives in barber-saas-loyalty-db; this service never migrates it.
+    url: ${DATABASE_URL:}
+    user: ${DATABASE_USER:}
+    password: ${DATABASE_PASSWORD:}
+    pool-max: ${DB_POOL_MAX:10}
+    statement-timeout-ms: ${DB_STATEMENT_TIMEOUT_MS:5000}
+  # The appointment domain, always through its API (golden rule 8, Annex J J.3.3).
+  appointment-api-url: ${APPOINTMENT_API_URL:http://appointment-api:8080}
