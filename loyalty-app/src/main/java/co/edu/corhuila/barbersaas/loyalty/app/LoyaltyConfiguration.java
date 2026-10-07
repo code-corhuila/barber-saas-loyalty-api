@@ -8,11 +8,14 @@ import co.edu.corhuila.barbersaas.loyalty.adapter.out.persistence.InMemoryLoyalt
 import co.edu.corhuila.barbersaas.loyalty.adapter.out.persistence.JdbcLoyaltyRepository;
 import co.edu.corhuila.barbersaas.loyalty.adapter.out.persistence.SystemClock;
 import co.edu.corhuila.barbersaas.loyalty.adapter.out.persistence.UuidGenerator;
+import co.edu.corhuila.barbersaas.loyalty.application.port.in.EventUseCases;
 import co.edu.corhuila.barbersaas.loyalty.application.port.in.LoyaltyUseCases;
 import co.edu.corhuila.barbersaas.loyalty.application.port.in.OutboxRelayUseCases;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.AppointmentLookup;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxStore;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.ProcessedEvents;
+import co.edu.corhuila.barbersaas.loyalty.application.usecase.HandleEvents;
 import co.edu.corhuila.barbersaas.loyalty.application.usecase.ManageLoyalty;
 import co.edu.corhuila.barbersaas.loyalty.application.usecase.RelayOutbox;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -73,6 +76,12 @@ public class LoyaltyConfiguration {
     @Bean
     OutboxRelayUseCases outboxRelayUseCases(LoyaltyRepository loyalty) {
         return new RelayOutbox((OutboxStore) loyalty, new SystemClock());
+    }
+
+    /** AppointmentCompleted from the worker; processed_event lives in the same store (both repositories). */
+    @Bean
+    EventUseCases eventUseCases(LoyaltyRepository loyalty) {
+        return new HandleEvents(loyalty, (ProcessedEvents) loyalty, new SystemClock(), new UuidGenerator());
     }
 
     /** JWT_PUBLIC_KEY: the PEM itself; a one-line value with literal \n escapes, as an env file holds it, is accepted. */
