@@ -1,6 +1,7 @@
 package co.edu.corhuila.barbersaas.loyalty.adapter.out.persistence;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,6 +14,7 @@ import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository.NotEnoughStickers;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository.StickerAlreadyGranted;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxEvent;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxStore;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.CouponStatus;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard.Redemption;
@@ -146,5 +148,27 @@ abstract class RepositoryContract {
         assertEquals(0, repository().cards(shop, null, true, null, page).total(), "no active rule");
         assertEquals(1, repository().cards(shop, client, null, null, page).total());
         assertEquals(0, repository().cards(shop, UUID.randomUUID(), null, null, page).total());
+    }
+
+    /** DEC-LOY-04: the worker reads the events written with each change and confirms them. */
+    @Test
+    void theEventsOfAStickerArePendingUntilConfirmedOrFailed() {
+        OutboxStore outbox = (OutboxStore) repository();
+        Instant now = now();
+        LoyaltyCard card = LoyaltyCard.open(UUID.randomUUID(), shop, client, now);
+        LoyaltyTransaction t = card.grantSticker(UUID.randomUUID(), null, staff, now);
+        OutboxEvent granted = new OutboxEvent(UUID.randomUUID(), card.id(), "StickerGranted",
+                Map.of("barbershopId", shop.toString()), Instant.parse("2000-01-01T00:00:00Z"));
+        repository().saveSticker(card, true, t, key("POST /api/v1/loyalty/stickers"), granted);
+
+        OutboxStore.Stored oldest = outbox.pending(1).get(0);
+
+        assertEquals(granted.id(), oldest.event().id());
+        assertEquals(shop.toString(), oldest.event().payload().get("barbershopId"));
+        assertTrue(outbox.markPublished(granted.id(), now));
+        assertTrue(outbox.markPublished(granted.id(), now), "confirming again is accepted");
+        assertTrue(outbox.pending(100).stream().noneMatch(st -> st.event().id().equals(granted.id())));
+        assertTrue(outbox.markFailed(granted.id(), "notifications-api 422", now));
+        assertFalse(outbox.markPublished(UUID.randomUUID(), now));
     }
 }
