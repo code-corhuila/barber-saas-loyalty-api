@@ -9,9 +9,12 @@ import co.edu.corhuila.barbersaas.loyalty.adapter.out.persistence.JdbcLoyaltyRep
 import co.edu.corhuila.barbersaas.loyalty.adapter.out.persistence.SystemClock;
 import co.edu.corhuila.barbersaas.loyalty.adapter.out.persistence.UuidGenerator;
 import co.edu.corhuila.barbersaas.loyalty.application.port.in.LoyaltyUseCases;
+import co.edu.corhuila.barbersaas.loyalty.application.port.in.OutboxRelayUseCases;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.AppointmentLookup;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxStore;
 import co.edu.corhuila.barbersaas.loyalty.application.usecase.ManageLoyalty;
+import co.edu.corhuila.barbersaas.loyalty.application.usecase.RelayOutbox;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
@@ -64,6 +67,12 @@ public class LoyaltyConfiguration {
     @Bean
     LoyaltyUseCases loyaltyUseCases(LoyaltyRepository loyalty, AppointmentLookup appointments) {
         return new ManageLoyalty(loyalty, appointments, new SystemClock(), new UuidGenerator());
+    }
+
+    /** The same store that writes StickerGranted and RewardRedeemed reads them for the worker (DEC-LOY-04). */
+    @Bean
+    OutboxRelayUseCases outboxRelayUseCases(LoyaltyRepository loyalty) {
+        return new RelayOutbox((OutboxStore) loyalty, new SystemClock());
     }
 
     /** JWT_PUBLIC_KEY: the PEM itself; a one-line value with literal \n escapes, as an env file holds it, is accepted. */
