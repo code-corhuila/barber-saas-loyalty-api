@@ -15,6 +15,8 @@ import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.LoyaltyRepository.StickerAlreadyGranted;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxEvent;
 import co.edu.corhuila.barbersaas.loyalty.application.port.out.OutboxStore;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.ProcessedEvents;
+import co.edu.corhuila.barbersaas.loyalty.application.port.out.ProcessedEvents.AlreadyProcessed;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.CouponStatus;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard.Redemption;
@@ -170,5 +172,30 @@ abstract class RepositoryContract {
         assertTrue(outbox.pending(100).stream().noneMatch(st -> st.event().id().equals(granted.id())));
         assertTrue(outbox.markFailed(granted.id(), "notifications-api 422", now));
         assertFalse(outbox.markPublished(UUID.randomUUID(), now));
+    }
+
+    /** ADR-016: an event's sticker and its processed_event row commit together; a second delivery is refused. */
+    @Test
+    void anEventIsProcessedOnceWithItsSticker() {
+        ProcessedEvents processed = (ProcessedEvents) repository();
+        UUID eventId = UUID.randomUUID();
+        Instant now = now();
+        LoyaltyCard card = LoyaltyCard.open(UUID.randomUUID(), shop, client, now);
+        LoyaltyTransaction t = card.grantSticker(UUID.randomUUID(), UUID.randomUUID(), staff, now);
+
+        assertFalse(processed.isProcessed(eventId));
+        LoyaltyCard stored = processed.saveEventSticker(card, true, t, event(card, "StickerGranted"), eventId,
+                "AppointmentCompleted");
+
+        assertEquals(1, stored.stickersCount());
+        assertTrue(processed.isProcessed(eventId));
+        LoyaltyTransaction again = card.grantSticker(UUID.randomUUID(), UUID.randomUUID(), staff, now);
+        assertThrows(AlreadyProcessed.class, () -> processed.saveEventSticker(card, false, again,
+                event(card, "StickerGranted"), eventId, "AppointmentCompleted"));
+        assertEquals(1, repository().cardOf(shop, client).orElseThrow().stickersCount(), "nothing stored");
+        UUID ignored = UUID.randomUUID();
+        processed.markProcessed(ignored, "AppointmentCompleted");
+        processed.markProcessed(ignored, "AppointmentCompleted");
+        assertTrue(processed.isProcessed(ignored));
     }
 }
