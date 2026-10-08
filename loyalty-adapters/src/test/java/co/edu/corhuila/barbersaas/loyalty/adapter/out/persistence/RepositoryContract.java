@@ -21,6 +21,7 @@ import co.edu.corhuila.barbersaas.loyalty.domain.model.CouponStatus;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard.Redemption;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyTransaction;
+import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardCoupon;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardsConfig;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.TransactionType;
 import java.time.Instant;
@@ -172,6 +173,30 @@ abstract class RepositoryContract {
         assertTrue(outbox.pending(100).stream().noneMatch(st -> st.event().id().equals(granted.id())));
         assertTrue(outbox.markFailed(granted.id(), "notifications-api 422", now));
         assertFalse(outbox.markPublished(UUID.randomUUID(), now));
+    }
+
+    /** DEC-LOY-06: the coupon of a booking and its processed_event row commit together, or neither does. */
+    @Test
+    void theCouponOfABookingIsUsedWithItsEventOrNotAtAll() {
+        ProcessedEvents processed = (ProcessedEvents) repository();
+        LoyaltyCard card = sticker(null);
+        RewardsConfig rule = new RewardsConfig(UUID.randomUUID(), shop, 1, "Free cut", true);
+        Redemption r = card.redeem(rule, UUID.randomUUID(), UUID.randomUUID(), staff, now());
+        repository().saveRedemption(card, 1, r.transaction(), r.coupon(), key("POST /api/v1/loyalty/redemptions"),
+                event(card, "RewardRedeemed"));
+        UUID appointment = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        r.coupon().use(appointment, now());
+
+        processed.saveEventCouponUse(r.coupon(), eventId, "AppointmentCreated");
+
+        RewardCoupon stored = repository().coupon(shop, r.coupon().id()).orElseThrow();
+        assertEquals(CouponStatus.USED, stored.status());
+        assertEquals(appointment, stored.appointmentId());
+        assertTrue(processed.isProcessed(eventId));
+        UUID other = UUID.randomUUID();
+        assertThrows(CouponTaken.class, () -> processed.saveEventCouponUse(r.coupon(), other, "AppointmentCreated"));
+        assertFalse(processed.isProcessed(other), "the processed_event row is rolled back with the coupon");
     }
 
     /** ADR-016: an event's sticker and its processed_event row commit together; a second delivery is refused. */
