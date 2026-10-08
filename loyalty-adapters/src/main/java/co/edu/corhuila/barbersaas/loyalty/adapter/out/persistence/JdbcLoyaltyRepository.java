@@ -222,6 +222,14 @@ public class JdbcLoyaltyRepository implements LoyaltyRepository, OutboxStore, Pr
     }
 
     @Override
+    public void saveEventCouponUse(RewardCoupon c, UUID eventId, String eventType) {
+        write(() -> {
+            jdbc.update("INSERT INTO loyalty.processed_event (event_id, event_type) VALUES (?, ?)", eventId, eventType);
+            saveCouponUse(c);                                  // CouponTaken rolls the row back
+        });
+    }
+
+    @Override
     public void saveCouponUse(RewardCoupon c) {
         int changed = jdbc.update("UPDATE loyalty.reward_coupon SET status = 'USED', appointment_id = ?, used_at = ? "
                 + "WHERE barbershop_id = ? AND id = ? AND status = 'ACTIVE'", c.appointmentId(), Timestamp.from(c.usedAt()),
