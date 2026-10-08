@@ -2,6 +2,7 @@ package co.edu.corhuila.barbersaas.loyalty.application.port.out;
 
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyCard;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyTransaction;
+import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardCoupon;
 import java.util.UUID;
 
 /**
@@ -28,4 +29,10 @@ public interface ProcessedEvents {
      */
     LoyaltyCard saveEventSticker(LoyaltyCard card, boolean newCard, LoyaltyTransaction transaction, OutboxEvent event,
                                  UUID eventId, String eventType);
+
+    /**
+     * The coupon applied at booking (DEC-LOY-06): ACTIVE → USED and the processed_event row in ONE
+     * transaction. {@link LoyaltyRepository.CouponTaken} when it is no longer ACTIVE.
+     */
+    void saveEventCouponUse(RewardCoupon coupon, UUID eventId, String eventType);
 }
