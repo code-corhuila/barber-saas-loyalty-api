@@ -4,7 +4,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * POST /internal/v1/events (ADR-016, DEC-LOY-01/05): the worker delivers one event at a time, at least
+ * POST /internal/v1/events (ADR-016, DEC-LOY-01/05/06): the worker delivers one event at a time, at least
  * once. Only the service token of barber-saas-worker.
  */
 public interface EventUseCases {
@@ -20,8 +20,10 @@ public interface EventUseCases {
     /**
      * AppointmentCompleted grants one sticker to its client in its barbershop, in the name of whoever
      * completed it. IGNORED without an active program or for a walk-in; DUPLICATE when already processed
-     * or the appointment already has its sticker. Any other type, or a payload without completedBy, is a
-     * BusinessRuleViolation (422) and the worker marks it failed.
+     * or the appointment already has its sticker. AppointmentCreated with a couponId marks that coupon
+     * USED (DEC-LOY-06); IGNORED without one. Any other type, a payload without completedBy, or a coupon
+     * that is unknown, another client's or used elsewhere, is a BusinessRuleViolation (422) and the
+     * worker marks it failed.
      */
     Receipt receive(Caller caller, IncomingEvent event);
 }
