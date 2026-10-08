@@ -197,6 +197,8 @@ abstract class RepositoryContract {
         UUID other = UUID.randomUUID();
         assertThrows(CouponTaken.class, () -> processed.saveEventCouponUse(r.coupon(), other, "AppointmentCreated"));
         assertFalse(processed.isProcessed(other), "the processed_event row is rolled back with the coupon");
+        assertThrows(AlreadyProcessed.class, () -> processed.saveEventCouponUse(r.coupon(), eventId, "AppointmentCreated"),
+                "a redelivery of the same event is refused the same way in memory and in PostgreSQL");
     }
 
     /** ADR-016: an event's sticker and its processed_event row commit together; a second delivery is refused. */
