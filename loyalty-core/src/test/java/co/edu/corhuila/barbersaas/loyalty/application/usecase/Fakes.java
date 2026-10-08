@@ -160,6 +160,15 @@ final class Fakes {
         }
 
         @Override
+        public void saveEventCouponUse(RewardCoupon coupon, UUID eventId, String eventType) {
+            if (processed.contains(eventId)) {
+                throw new AlreadyProcessed();
+            }
+            saveCouponUse(coupon);
+            processed.add(eventId);
+        }
+
+        @Override
         public void saveCouponUse(RewardCoupon coupon) {
             if (coupons.get(coupon.id()).status() == CouponStatus.USED) {
                 throw new CouponTaken();
