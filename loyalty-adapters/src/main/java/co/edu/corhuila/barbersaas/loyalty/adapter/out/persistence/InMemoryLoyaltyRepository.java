@@ -174,6 +174,15 @@ public class InMemoryLoyaltyRepository implements LoyaltyRepository, OutboxStore
     }
 
     @Override
+    public synchronized void saveEventCouponUse(RewardCoupon coupon, UUID eventId, String eventType) {
+        if (processedEvents.containsKey(eventId)) {
+            throw new AlreadyProcessed();
+        }
+        saveCouponUse(coupon);
+        processedEvents.put(eventId, eventType);
+    }
+
+    @Override
     public synchronized void saveCouponUse(RewardCoupon coupon) {
         if (coupons.get(coupon.id()).status() != CouponStatus.ACTIVE) {
             throw new CouponTaken();
