@@ -59,6 +59,13 @@ event's id to `processed_event` in the same transaction. A redelivery, or an app
 has its sticker, answers `DUPLICATE`; a walk-in or a barbershop without an active program `IGNORED`;
 any other type, or an `AppointmentCompleted` without `completedBy`, `422`. All three outcomes are `200`.
 
+**The coupon applied at booking (DEC-LOY-06, FR-010):** appointment-api applies the client's `ACTIVE`
+coupon when booking (`DEC-APPT-09`), and the worker delivers its `AppointmentCreated` (version 2, with
+`couponId`) here. The coupon becomes `USED` with that appointment, and the event's id goes to
+`processed_event`, in one transaction. Without `couponId` it answers `IGNORED`; a redelivery, or the coupon
+already used by that same appointment, `DUPLICATE`; a coupon that is unknown, another client's or used on
+another appointment, `422` for a person to review. Cancelling the appointment does not give it back.
+
 **Events (DEC-LOY-04, ADR-016):** every sticker writes `StickerGranted` and every redemption
 `RewardRedeemed` to `loyalty.outbox_event` in the same transaction; `barber-saas-worker` reads them
 through the internal operations and delivers them to notifications.
@@ -91,4 +98,5 @@ is also tested against a database migrated by `barber-saas-loyalty-db` when `TES
 ### What is missing
 
 - `completedBy` and the removal of `couponCode` follow barber-saas-docs#91 (pending approval). A
-  client's existence is not checked, and the booking flow's service token cannot use a coupon yet (#88).
+  client's existence is not checked. The booking flow consumes its coupon by event (`DEC-LOY-06`), so it
+  needs no service token of its own (#88).
