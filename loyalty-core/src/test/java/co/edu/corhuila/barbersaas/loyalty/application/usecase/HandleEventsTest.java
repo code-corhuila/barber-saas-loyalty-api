@@ -9,8 +9,10 @@ import co.edu.corhuila.barbersaas.loyalty.application.port.in.Caller;
 import co.edu.corhuila.barbersaas.loyalty.application.port.in.Caller.Role;
 import co.edu.corhuila.barbersaas.loyalty.application.port.in.EventUseCases.IncomingEvent;
 import co.edu.corhuila.barbersaas.loyalty.application.port.in.EventUseCases.Outcome;
+import co.edu.corhuila.barbersaas.loyalty.domain.model.CouponStatus;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.DomainException.BusinessRuleViolation;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.LoyaltyTransaction;
+import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardCoupon;
 import co.edu.corhuila.barbersaas.loyalty.domain.model.RewardsConfig;
 import java.time.Instant;
 import java.util.HashMap;
@@ -43,6 +45,74 @@ class HandleEventsTest {
             payload.put("completedBy", completedBy.toString());
         }
         return new IncomingEvent(UUID.randomUUID(), "AppointmentCompleted", completedBy == null ? 1 : 2, SHOP, payload);
+    }
+
+    /** AppointmentCreated version 2 (DEC-APPT-09); {@code coupon} null when booked without one. */
+    IncomingEvent created(UUID appointment, UUID clientId, UUID coupon) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("appointmentId", appointment.toString());
+        payload.put("barbershopId", SHOP.toString());
+        payload.put("clientId", clientId == null ? null : clientId.toString());
+        payload.put("couponId", coupon == null ? null : coupon.toString());
+        return new IncomingEvent(UUID.randomUUID(), "AppointmentCreated", 2, SHOP, payload);
+    }
+
+    UUID activeCoupon(UUID owner) {
+        UUID id = UUID.randomUUID();
+        repository.coupons.put(id, RewardCoupon.restore(id, SHOP, owner, CouponStatus.ACTIVE, null,
+                Instant.parse("2026-10-01T14:00:00Z"), null));
+        return id;
+    }
+
+    // --- DEC-LOY-06: the coupon applied at booking ----------------------------------------------
+
+    @Test
+    void theCouponAppliedAtBookingBecomesUsedWithThatAppointment() {
+        UUID coupon = activeCoupon(client);
+        UUID appointment = UUID.randomUUID();
+        IncomingEvent e = created(appointment, client, coupon);
+
+        assertEquals(Outcome.PROCESSED, events.receive(worker, e).outcome());
+
+        RewardCoupon used = repository.coupons.get(coupon);
+        assertEquals(CouponStatus.USED, used.status());
+        assertEquals(appointment, used.appointmentId());
+        assertTrue(repository.processed.contains(e.id()));
+        assertEquals(Outcome.DUPLICATE, events.receive(worker, e).outcome(), "a redelivery changes nothing");
+    }
+
+    @Test
+    void anotherEventOfTheSameBookingFindsTheCouponAlreadyUsedByItAndIsADuplicate() {
+        UUID coupon = activeCoupon(client);
+        UUID appointment = UUID.randomUUID();
+        events.receive(worker, created(appointment, client, coupon));
+
+        assertEquals(Outcome.DUPLICATE, events.receive(worker, created(appointment, client, coupon)).outcome());
+    }
+
+    @Test
+    void aBookingWithoutACouponIsIgnored() {
+        IncomingEvent withoutCoupon = created(UUID.randomUUID(), client, null);
+        IncomingEvent walkIn = created(UUID.randomUUID(), null, null);
+
+        assertEquals(Outcome.IGNORED, events.receive(worker, withoutCoupon).outcome());
+        assertEquals(Outcome.IGNORED, events.receive(worker, walkIn).outcome());
+        assertEquals(Outcome.DUPLICATE, events.receive(worker, withoutCoupon).outcome());
+    }
+
+    @Test
+    void aCouponUsedOnAnotherAppointmentUnknownOrOfAnotherClientNeedsAPerson() {
+        UUID coupon = activeCoupon(client);
+        events.receive(worker, created(UUID.randomUUID(), client, coupon));
+
+        assertThrows(BusinessRuleViolation.class,
+                () -> events.receive(worker, created(UUID.randomUUID(), client, coupon)));
+        assertThrows(BusinessRuleViolation.class,
+                () -> events.receive(worker, created(UUID.randomUUID(), client, UUID.randomUUID())));
+        UUID someoneElses = activeCoupon(UUID.randomUUID());
+        assertThrows(BusinessRuleViolation.class,
+                () -> events.receive(worker, created(UUID.randomUUID(), client, someoneElses)));
+        assertEquals(CouponStatus.ACTIVE, repository.coupons.get(someoneElses).status());
     }
 
     @Test
