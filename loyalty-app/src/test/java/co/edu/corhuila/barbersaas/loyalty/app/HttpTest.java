@@ -78,7 +78,7 @@ abstract class HttpTest {
     void drainOutbox(com.fasterxml.jackson.databind.ObjectMapper json, String worker) throws Exception {
         while (true) {
             var pending = json.readTree(http.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                    .get("/internal/v1/outbox-events").param("limit", "100").header("Authorization", worker))
+                    .get("/internal/v1/outbox-events").param("limit", "50").header("Authorization", worker))
                     .andReturn().getResponse().getContentAsString()).get("data");
             if (pending.isEmpty()) {
                 return;
