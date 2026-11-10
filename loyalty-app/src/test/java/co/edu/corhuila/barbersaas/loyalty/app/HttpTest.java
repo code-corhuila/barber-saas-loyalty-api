@@ -50,18 +50,32 @@ abstract class HttpTest {
         return signed(userId.toString(), role, barbershopId);
     }
 
+    /** The scopes of WORKER_LOYALTY_TOKEN (dev-keys.sh; 07-api/authentication.md, Scopes). */
+    static final String WORKER_SCOPES = "outbox:relay events:deliver";
+
     /**
-     * "Bearer ..." for a service token meant for loyalty-api, as dev-keys.sh issues it: role SERVICE, the
-     * service's name as sub, loyalty-api as aud, no barbershop.
+     * "Bearer ..." for a service token meant for loyalty-api, as dev-keys.sh issues WORKER_LOYALTY_TOKEN:
+     * role SERVICE, the service's name as sub, loyalty-api as aud, its scopes, no barbershop.
      */
     static String serviceBearer(String service) {
         long now = Instant.now().getEpochSecond();
         return serviceBearer(service, "barber-saas-loyalty-api", now, now + 600);
     }
 
-    /** A service token with that {@code aud} (null for none) and those {@code iat} and {@code exp}. */
+    /** A service token with that {@code aud} (null for none), the worker's scopes and those {@code iat} and {@code exp}. */
     static String serviceBearer(String service, String audience, long iat, long exp) {
-        return signed(service, "SERVICE", null, audience == null ? "" : ",\"aud\":\"" + audience + "\"", iat, exp);
+        return serviceBearer(service, audience, WORKER_SCOPES, iat, exp);
+    }
+
+    /** A service token meant for loyalty-api that grants only {@code scope} (null for none), valid for 10 minutes. */
+    static String scopedBearer(String service, String scope) {
+        long now = Instant.now().getEpochSecond();
+        return serviceBearer(service, "barber-saas-loyalty-api", scope, now, now + 600);
+    }
+
+    static String serviceBearer(String service, String audience, String scope, long iat, long exp) {
+        return signed(service, "SERVICE", null, (audience == null ? "" : ",\"aud\":\"" + audience + "\"")
+                + (scope == null ? "" : ",\"scope\":\"" + scope + "\""), iat, exp);
     }
 
     private static String signed(String subject, String role, UUID barbershopId) {
