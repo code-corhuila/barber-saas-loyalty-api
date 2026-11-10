@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -25,7 +26,7 @@ class RelayOutboxTest {
 
     static final Instant NOW = Instant.parse("2026-10-06T14:00:00Z");
 
-    final Caller worker = new Caller("barber-saas-worker", Role.SERVICE, null, "token");
+    final Caller worker = new Caller("barber-saas-worker", Role.SERVICE, null, "token", Set.of(Caller.AUDIENCE));
     final FakeOutbox outbox = new FakeOutbox();
     final RelayOutbox relay = new RelayOutbox(outbox, () -> NOW);
 
@@ -126,8 +127,10 @@ class RelayOutboxTest {
         Caller schedule = new Caller("barber-saas-schedule-api", Role.SERVICE, null, "t");
         Caller admin = new Caller(UUID.randomUUID().toString(), Role.ADMIN_BARBERSHOP, UUID.randomUUID(), "t");
         Caller impostor = new Caller("barber-saas-worker", Role.ADMIN_BARBERSHOP, UUID.randomUUID(), "t");
+        Caller noAudience = new Caller("barber-saas-worker", Role.SERVICE, null, "t");                     // docs#158
+        Caller forAppointment = new Caller("barber-saas-worker", Role.SERVICE, null, "t", Set.of("barber-saas-appointment-api"));
 
-        for (Caller caller : List.of(schedule, admin, impostor)) {
+        for (Caller caller : List.of(schedule, admin, impostor, noAudience, forAppointment)) {
             assertThrows(Forbidden.class, () -> relay.pending(caller, 10));
             assertThrows(Forbidden.class, () -> relay.published(caller, UUID.randomUUID()));
             assertThrows(Forbidden.class, () -> relay.failed(caller, UUID.randomUUID(), "x"));

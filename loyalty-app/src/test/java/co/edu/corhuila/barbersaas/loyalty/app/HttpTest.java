@@ -50,16 +50,29 @@ abstract class HttpTest {
         return signed(userId.toString(), role, barbershopId);
     }
 
-    /** "Bearer ..." for a service token: role SERVICE, the service's name as sub, no barbershop. */
+    /**
+     * "Bearer ..." for a service token meant for loyalty-api, as dev-keys.sh issues it: role SERVICE, the
+     * service's name as sub, loyalty-api as aud, no barbershop.
+     */
     static String serviceBearer(String service) {
-        return signed(service, "SERVICE", null);
+        long now = Instant.now().getEpochSecond();
+        return serviceBearer(service, "barber-saas-loyalty-api", now, now + 600);
+    }
+
+    /** A service token with that {@code aud} (null for none) and those {@code iat} and {@code exp}. */
+    static String serviceBearer(String service, String audience, long iat, long exp) {
+        return signed(service, "SERVICE", null, audience == null ? "" : ",\"aud\":\"" + audience + "\"", iat, exp);
     }
 
     private static String signed(String subject, String role, UUID barbershopId) {
         long now = Instant.now().getEpochSecond();
+        return signed(subject, role, barbershopId, "", now, now + 600);
+    }
+
+    private static String signed(String subject, String role, UUID barbershopId, String extra, long iat, long exp) {
         String claims = "{\"iss\":\"barber-saas-identity-auth-api\",\"sub\":\"" + subject + "\",\"role\":\"" + role + "\""
-                + (barbershopId == null ? "" : ",\"barbershopId\":\"" + barbershopId + "\"")
-                + ",\"iat\":" + now + ",\"exp\":" + (now + 600) + "}";
+                + (barbershopId == null ? "" : ",\"barbershopId\":\"" + barbershopId + "\"") + extra
+                + ",\"iat\":" + iat + ",\"exp\":" + exp + "}";
         try {
             String input = b64("{\"alg\":\"RS256\",\"typ\":\"JWT\",\"kid\":\"dev-1\"}") + "." + b64(claims);
             Signature rsa = Signature.getInstance("SHA256withRSA");
