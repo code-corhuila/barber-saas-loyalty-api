@@ -27,6 +27,8 @@ import java.util.UUID;
  */
 public class HandleEvents implements EventUseCases {
 
+    /** The scope of delivering an event here (07-api/authentication.md, Scopes; docs#159). */
+    static final String DELIVER_SCOPE = "events:deliver";
     static final String APPOINTMENT_COMPLETED = "AppointmentCompleted";
     static final String APPOINTMENT_CREATED = "AppointmentCreated";
 
@@ -44,7 +46,7 @@ public class HandleEvents implements EventUseCases {
 
     @Override
     public Receipt receive(Caller caller, IncomingEvent e) {
-        caller.requireService(RelayOutbox.WORKER);
+        caller.requireService(RelayOutbox.WORKER, DELIVER_SCOPE);
         if (!APPOINTMENT_COMPLETED.equals(e.type()) && !APPOINTMENT_CREATED.equals(e.type())) {
             throw new BusinessRuleViolation("loyalty does not handle " + e.type());
         }

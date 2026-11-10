@@ -28,7 +28,8 @@ class HandleEventsTest {
     static final UUID SHOP = UUID.randomUUID();
     final UUID client = UUID.randomUUID();
     final UUID barber = UUID.randomUUID();
-    final Caller worker = new Caller("barber-saas-worker", Role.SERVICE, null, "t", Set.of(Caller.AUDIENCE));
+    final Caller worker = new Caller("barber-saas-worker", Role.SERVICE, null, "t", Set.of(Caller.AUDIENCE),
+            Set.of("outbox:relay", "events:deliver"));                 // WORKER_LOYALTY_TOKEN of dev-keys.sh
     final Fakes.Repository repository = new Fakes.Repository();
     final HandleEvents events = new HandleEvents(repository, repository, () -> Instant.parse("2026-10-07T14:00:00Z"),
             UUID::randomUUID);
@@ -181,9 +182,22 @@ class HandleEventsTest {
     void aWorkerTokenMeantForAnotherServiceGrantsNoSticker() {      // docs#158
         program(true);
         for (Caller caller : List.of(new Caller("barber-saas-worker", Role.SERVICE, null, "t"),
-                new Caller("barber-saas-worker", Role.SERVICE, null, "t", Set.of("barber-saas-appointment-api")))) {
+                new Caller("barber-saas-worker", Role.SERVICE, null, "t", Set.of("barber-saas-appointment-api"),
+                        Set.of("outbox:relay", "events:deliver")))) {
             assertThrows(Forbidden.class, () -> events.receive(caller, completed(UUID.randomUUID(), client, barber)));
         }
         assertTrue(repository.transactions.isEmpty());
+    }
+
+    @Test
+    void aWorkerTokenWithoutEventsDeliverGrantsNoSticker() {      // docs#159
+        program(true);
+        for (Set<String> scopes : List.of(Set.of("subscriptions:expire"), Set.of("outbox:relay"), Set.<String>of())) {
+            Caller caller = new Caller("barber-saas-worker", Role.SERVICE, null, "t", Set.of(Caller.AUDIENCE), scopes);
+            assertThrows(Forbidden.class, () -> events.receive(caller, completed(UUID.randomUUID(), client, barber)));
+        }
+        assertTrue(repository.transactions.isEmpty());
+        assertEquals(Outcome.PROCESSED, events.receive(new Caller("barber-saas-worker", Role.SERVICE, null, "t",
+                Set.of(Caller.AUDIENCE), Set.of("events:deliver")), completed(UUID.randomUUID(), client, barber)).outcome());
     }
 }

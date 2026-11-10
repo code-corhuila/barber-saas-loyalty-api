@@ -12,6 +12,7 @@ import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -85,7 +86,10 @@ public class Rs256Verifier {
             }
             UUID tenant = claims.path("barbershopId").isTextual()
                     ? UUID.fromString(claims.get("barbershopId").asText()) : null;
-            return new Caller(claims.get("sub").asText(), role, tenant, token, audience(claims.path("aud")));
+            // scope is one space-separated string (07-api/authentication.md, Scopes; docs#159).
+            Set<String> scopes = claims.path("scope").isTextual() && !claims.get("scope").asText().isBlank()
+                    ? Set.copyOf(List.of(claims.get("scope").asText().trim().split("\s+"))) : Set.of();
+            return new Caller(claims.get("sub").asText(), role, tenant, token, audience(claims.path("aud")), scopes);
         } catch (InvalidTokenException e) {
             throw e;
         } catch (Exception e) {
