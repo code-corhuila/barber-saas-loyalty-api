@@ -11,7 +11,8 @@ import java.util.UUID;
  * cases: the adapter passes it on to appointment-api, which validates it again and
  * applies its tenant itself. It is never logged.
  */
-public record Caller(String subject, Role role, UUID barbershopId, String credential, Set<String> audience) {
+public record Caller(String subject, Role role, UUID barbershopId, String credential, Set<String> audience,
+                     Set<String> scopes) {
 
     /** The four user roles of identity-auth plus SERVICE, for the tokens of worker and workflow. */
     public enum Role { SUPER_ADMIN, ADMIN_BARBERSHOP, BARBER, CLIENT, SERVICE }
@@ -23,11 +24,12 @@ public record Caller(String subject, Role role, UUID barbershopId, String creden
         Objects.requireNonNull(subject);
         Objects.requireNonNull(role);
         audience = audience == null ? Set.of() : Set.copyOf(audience);
+        scopes = scopes == null ? Set.of() : Set.copyOf(scopes);
     }
 
-    /** A caller whose token names no audience. */
+    /** A caller whose token names no audience and no scope. */
     public Caller(String subject, Role role, UUID barbershopId, String credential) {
-        this(subject, role, barbershopId, credential, Set.of());
+        this(subject, role, barbershopId, credential, Set.of(), Set.of());
     }
 
     /** The tenant every scoped read and write filters by; SUPER_ADMIN and a client without one are refused. */
@@ -52,14 +54,19 @@ public record Caller(String subject, Role role, UUID barbershopId, String creden
      * Internal operations accept only the service token of the one service they exist for
      * (authentication.md, "Internal operations"): a user's token, or another service's, is refused.
      * The token must also be meant for loyalty-api ({@code aud}), so a worker token issued for another
-     * service cannot be replayed here to grant stickers (docs#158).
+     * service cannot be replayed here to grant stickers (docs#158). And it must grant {@code scope}, the
+     * operation being called (07-api/authentication.md, Scopes): a worker token for another operation, such
+     * as {@code subscriptions:expire}, is refused (docs#159).
      */
-    public void requireService(String service) {
+    public void requireService(String service, String scope) {
         if (role != Role.SERVICE || !subject.equals(service)) {
             throw new Forbidden("Only " + service + " can do this");
         }
         if (!audience.contains(AUDIENCE)) {
             throw new Forbidden("This token is not meant for " + AUDIENCE);
+        }
+        if (!scopes.contains(scope)) {
+            throw new Forbidden("This token does not grant " + scope);
         }
     }
 
