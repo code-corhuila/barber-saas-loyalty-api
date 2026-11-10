@@ -11,6 +11,7 @@ import java.security.KeyPairGenerator;
 import java.security.Signature;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -57,6 +58,37 @@ class Rs256VerifierTest {
         return "{\"iss\":\"barber-saas-identity-auth-api\",\"sub\":\"" + UUID.randomUUID() + "\",\"role\":\"" + role
                 + "\"" + (tenant == null ? "" : ",\"barbershopId\":\"" + tenant + "\"") + ",\"iat\":"
                 + NOW.getEpochSecond() + ",\"exp\":" + exp + "}";
+    }
+
+    /** The claims of a worker token as dev-keys.sh issues it; {@code aud} is raw JSON (a string or an array), or null. */
+    private static String service(String aud, long iat, long exp) {
+        return "{\"iss\":\"barber-saas-identity-auth-api\",\"sub\":\"barber-saas-worker\",\"role\":\"SERVICE\""
+                + (aud == null ? "" : ",\"aud\":" + aud) + ",\"iat\":" + iat + ",\"exp\":" + exp + "}";
+    }
+
+    @Test
+    void a_service_token_carries_its_audience() throws Exception {                       // docs#158
+        long iat = NOW.getEpochSecond();
+        assertEquals(Set.of("barber-saas-loyalty-api"), verifier.verify(token(KEYS, "RS256",
+                service("\"barber-saas-loyalty-api\"", iat, iat + 600)), NOW).audience());
+        assertEquals(Set.of("barber-saas-loyalty-api", "barber-saas-app"), verifier.verify(token(KEYS, "RS256",
+                service("[\"barber-saas-loyalty-api\",\"barber-saas-app\"]", iat, iat + 600)), NOW).audience());
+        assertEquals(Set.of(), verifier.verify(token(KEYS, "RS256", service(null, iat, iat + 600)), NOW).audience());
+    }
+
+    @Test
+    void a_service_token_lives_at_most_seven_days() throws Exception {                   // docs#158
+        long iat = NOW.getEpochSecond() - 3600;
+        String aud = "\"barber-saas-loyalty-api\"";
+        verifier.verify(token(KEYS, "RS256", service(aud, iat, iat + 604800)), NOW);
+        assertThrows(Rs256Verifier.InvalidTokenException.class, () -> verifier.verify(
+                token(KEYS, "RS256", service(aud, iat, iat + 604801)), NOW), "longer than 7 days");
+        assertThrows(Rs256Verifier.InvalidTokenException.class, () -> verifier.verify(
+                token(KEYS, "RS256", service(aud, iat, iat + 31536000)), NOW), "the old one-year token");
+        assertThrows(Rs256Verifier.InvalidTokenException.class, () -> verifier.verify(token(KEYS, "RS256",
+                service(aud, iat, iat + 600).replace(",\"iat\":" + iat, "")), NOW), "no iat, no lifetime to check");
+        assertThrows(Rs256Verifier.InvalidTokenException.class, () -> verifier.verify(
+                token(KEYS, "RS256", service(aud, iat - 7200, NOW.getEpochSecond() - 120)), NOW), "expired");
     }
 
     @Test
