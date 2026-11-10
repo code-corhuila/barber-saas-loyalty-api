@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-11-10
+
+User stories: code-corhuila/barber-saas-docs#158, code-corhuila/barber-saas-docs#159, code-corhuila/barber-saas-docs#160
+
+### Security
+
+- auth: accept only short-lived worker tokens meant for loyalty (`aud: barber-saas-loyalty-api`, at most 7 days; otherwise 403 or 401)
+- auth: require the scope of each internal operation (`outbox:relay` for the outbox relay, `events:deliver` for `POST /internal/v1/events`)
+
+### Fixed
+
+- outbox: read at most fifty pending events per call (`limit` 1–50, 51 → 400)
+
 ## [2.0.0] - 2026-10-08
 
 User stories: code-corhuila/barber-saas-docs#4, code-corhuila/barber-saas-docs#9, code-corhuila/barber-saas-docs#59
@@ -65,4 +78,5 @@ User stories: code-corhuila/barber-saas-docs#4, code-corhuila/barber-saas-docs#9
 - build: add the app module that composes the service
 - config: list the environment variables without any value
 
+[3.0.0]: https://github.com/code-corhuila/barber-saas-loyalty-api/releases/tag/v3.0.0
 [2.0.0]: https://github.com/code-corhuila/barber-saas-loyalty-api/releases/tag/v2.0.0
