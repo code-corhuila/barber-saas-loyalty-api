@@ -26,7 +26,8 @@ class RelayOutboxTest {
 
     static final Instant NOW = Instant.parse("2026-10-06T14:00:00Z");
 
-    final Caller worker = new Caller("barber-saas-worker", Role.SERVICE, null, "token", Set.of(Caller.AUDIENCE));
+    final Caller worker = new Caller("barber-saas-worker", Role.SERVICE, null, "token", Set.of(Caller.AUDIENCE),
+            Set.of("outbox:relay", "events:deliver"));                 // WORKER_LOYALTY_TOKEN of dev-keys.sh
     final FakeOutbox outbox = new FakeOutbox();
     final RelayOutbox relay = new RelayOutbox(outbox, () -> NOW);
 
@@ -128,9 +129,13 @@ class RelayOutboxTest {
         Caller admin = new Caller(UUID.randomUUID().toString(), Role.ADMIN_BARBERSHOP, UUID.randomUUID(), "t");
         Caller impostor = new Caller("barber-saas-worker", Role.ADMIN_BARBERSHOP, UUID.randomUUID(), "t");
         Caller noAudience = new Caller("barber-saas-worker", Role.SERVICE, null, "t");                     // docs#158
-        Caller forAppointment = new Caller("barber-saas-worker", Role.SERVICE, null, "t", Set.of("barber-saas-appointment-api"));
+        Caller forAppointment = new Caller("barber-saas-worker", Role.SERVICE, null, "t", Set.of("barber-saas-appointment-api"),
+                Set.of("outbox:relay"));
+        Set<String> loyalty = Set.of(Caller.AUDIENCE);                                                      // docs#159
+        Caller expireOnly = new Caller("barber-saas-worker", Role.SERVICE, null, "t", loyalty, Set.of("subscriptions:expire"));
+        Caller deliverOnly = new Caller("barber-saas-worker", Role.SERVICE, null, "t", loyalty, Set.of("events:deliver"));
 
-        for (Caller caller : List.of(schedule, admin, impostor, noAudience, forAppointment)) {
+        for (Caller caller : List.of(schedule, admin, impostor, noAudience, forAppointment, expireOnly, deliverOnly)) {
             assertThrows(Forbidden.class, () -> relay.pending(caller, 10));
             assertThrows(Forbidden.class, () -> relay.published(caller, UUID.randomUUID()));
             assertThrows(Forbidden.class, () -> relay.failed(caller, UUID.randomUUID(), "x"));

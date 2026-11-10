@@ -17,6 +17,8 @@ import java.util.UUID;
 public class RelayOutbox implements OutboxRelayUseCases {
 
     static final String WORKER = "barber-saas-worker";
+    /** The scope of reading and confirming the outbox (07-api/authentication.md, Scopes; docs#159). */
+    static final String RELAY_SCOPE = "outbox:relay";
     /** Every loyalty event is at version 1; it grows only when a payload gains a field. */
     static final int VERSION = 1;
     static final int REASON_MAX = 500;
@@ -31,13 +33,13 @@ public class RelayOutbox implements OutboxRelayUseCases {
 
     @Override
     public List<EventEnvelope> pending(Caller caller, int limit) {
-        caller.requireService(WORKER);
+        caller.requireService(WORKER, RELAY_SCOPE);
         return outbox.pending(limit).stream().map(RelayOutbox::envelope).toList();
     }
 
     @Override
     public void published(Caller caller, UUID eventId) {
-        caller.requireService(WORKER);
+        caller.requireService(WORKER, RELAY_SCOPE);
         if (!outbox.markPublished(eventId, clock.now())) {
             throw new NotFound("Outbox event");
         }
@@ -45,7 +47,7 @@ public class RelayOutbox implements OutboxRelayUseCases {
 
     @Override
     public void failed(Caller caller, UUID eventId, String reason) {
-        caller.requireService(WORKER);
+        caller.requireService(WORKER, RELAY_SCOPE);
         if (reason == null || reason.isBlank() || reason.length() > REASON_MAX) {
             throw new InvalidValue("reason must have between 1 and " + REASON_MAX + " characters");
         }
