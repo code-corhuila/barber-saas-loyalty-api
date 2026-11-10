@@ -69,6 +69,21 @@ class InternalOutboxHttpTest extends HttpTest {
     }
 
     @Test
+    void theOutboxIsReadInBatchesOfAtMostFifty() throws Exception {      // docs#160
+        http.perform(get(OUTBOX).param("limit", "51").header("Authorization", worker))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.details[0].field").value("limit"));
+        http.perform(get(OUTBOX).param("limit", "0").header("Authorization", worker)).andExpect(status().isBadRequest());
+        for (int i = 0; i < 51; i++) {
+            http.perform(post("/api/v1/loyalty/stickers").header("Authorization", bearer("BARBER", shop))
+                            .header("Idempotency-Key", "key-" + UUID.randomUUID())
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"clientId\":\"" + UUID.randomUUID() + "\"}"))
+                    .andExpect(status().isCreated());
+        }
+        http.perform(get(OUTBOX).param("limit", "50").header("Authorization", worker))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.length()").value(50));
+    }
+
+    @Test
     void onlyTheWorkersServiceTokenGetsIn() throws Exception {
         http.perform(get(OUTBOX).header("Authorization", bearer("ADMIN_BARBERSHOP", shop))).andExpect(status().isForbidden());
         http.perform(get(OUTBOX).header("Authorization", serviceBearer("barber-saas-workflow"))).andExpect(status().isForbidden());
