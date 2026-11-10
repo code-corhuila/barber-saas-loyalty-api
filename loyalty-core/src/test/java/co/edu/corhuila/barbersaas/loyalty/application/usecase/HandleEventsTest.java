@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -27,7 +28,7 @@ class HandleEventsTest {
     static final UUID SHOP = UUID.randomUUID();
     final UUID client = UUID.randomUUID();
     final UUID barber = UUID.randomUUID();
-    final Caller worker = new Caller("barber-saas-worker", Role.SERVICE, null, "t");
+    final Caller worker = new Caller("barber-saas-worker", Role.SERVICE, null, "t", Set.of(Caller.AUDIENCE));
     final Fakes.Repository repository = new Fakes.Repository();
     final HandleEvents events = new HandleEvents(repository, repository, () -> Instant.parse("2026-10-07T14:00:00Z"),
             UUID::randomUUID);
@@ -171,6 +172,16 @@ class HandleEventsTest {
         program(true);
         for (Caller caller : List.of(new Caller(UUID.randomUUID().toString(), Role.ADMIN_BARBERSHOP, SHOP, "t"),
                 new Caller("barber-saas-workflow", Role.SERVICE, null, "t"))) {
+            assertThrows(Forbidden.class, () -> events.receive(caller, completed(UUID.randomUUID(), client, barber)));
+        }
+        assertTrue(repository.transactions.isEmpty());
+    }
+
+    @Test
+    void aWorkerTokenMeantForAnotherServiceGrantsNoSticker() {      // docs#158
+        program(true);
+        for (Caller caller : List.of(new Caller("barber-saas-worker", Role.SERVICE, null, "t"),
+                new Caller("barber-saas-worker", Role.SERVICE, null, "t", Set.of("barber-saas-appointment-api")))) {
             assertThrows(Forbidden.class, () -> events.receive(caller, completed(UUID.randomUUID(), client, barber)));
         }
         assertTrue(repository.transactions.isEmpty());
