@@ -108,6 +108,21 @@ class InternalEventsHttpTest extends HttpTest {
     }
 
     @Test
+    void eachWorkerTokenGetsInOnlyWithTheEventsDeliverScope() throws Exception {             // docs#159
+        program();
+        UUID eventId = UUID.randomUUID();
+        String body = envelope(eventId, "AppointmentCompleted", clientId, true);
+
+        for (String scope : new String[] {"subscriptions:expire", "outbox:relay", null}) {
+            deliver(scopedBearer("barber-saas-worker", scope), body).andExpect(status().isForbidden());
+        }
+        http.perform(get("/api/v1/loyalty/cards/me").header("Authorization", bearer(clientId, "CLIENT", shop)))
+                .andExpect(status().isNotFound());                       // no sticker was granted
+        deliver(scopedBearer("barber-saas-worker", "events:deliver"), body)
+                .andExpect(status().isOk()).andExpect(jsonPath("$.outcome").value("PROCESSED"));
+    }
+
+    @Test
     void onlyTheWorkersServiceTokenIsAccepted() throws Exception {
         String body = envelope(UUID.randomUUID(), "AppointmentCompleted", clientId, true);
         deliver(bearer("ADMIN_BARBERSHOP", shop), body).andExpect(status().isForbidden());

@@ -77,6 +77,15 @@ class Rs256VerifierTest {
     }
 
     @Test
+    void a_service_token_carries_its_space_separated_scopes() throws Exception {         // docs#159
+        long iat = NOW.getEpochSecond();
+        String claims = service("\"barber-saas-loyalty-api\"", iat, iat + 600);
+        assertEquals(Set.of("outbox:relay", "events:deliver"), verifier.verify(token(KEYS, "RS256",
+                claims.replace("}", ",\"scope\":\"outbox:relay  events:deliver\"}")), NOW).scopes());
+        assertEquals(Set.of(), verifier.verify(token(KEYS, "RS256", claims), NOW).scopes());
+    }
+
+    @Test
     void a_service_token_lives_at_most_seven_days() throws Exception {                   // docs#158
         long iat = NOW.getEpochSecond() - 3600;
         String aud = "\"barber-saas-loyalty-api\"";
