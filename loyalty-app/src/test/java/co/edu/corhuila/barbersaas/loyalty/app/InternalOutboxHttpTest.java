@@ -89,4 +89,18 @@ class InternalOutboxHttpTest extends HttpTest {
         http.perform(get(OUTBOX).header("Authorization", serviceBearer("barber-saas-workflow"))).andExpect(status().isForbidden());
         http.perform(get(OUTBOX)).andExpect(status().isUnauthorized());
     }
+
+    @Test
+    void eachWorkerTokenGetsInOnlyWithTheOutboxRelayScope() throws Exception {              // docs#159
+        String id = grantedEvent().get("id").asText();
+
+        for (String scope : new String[] {"subscriptions:expire", "events:deliver", null}) {
+            String token = scopedBearer("barber-saas-worker", scope);
+            http.perform(get(OUTBOX).header("Authorization", token)).andExpect(status().isForbidden());
+            http.perform(post(OUTBOX + "/" + id + "/published").header("Authorization", token)).andExpect(status().isForbidden());
+        }
+        http.perform(get(OUTBOX).header("Authorization", worker)).andExpect(jsonPath("$.data[*].id", hasItem(id)));
+        http.perform(get(OUTBOX).header("Authorization", scopedBearer("barber-saas-worker", "outbox:relay")))
+                .andExpect(status().isOk());
+    }
 }
