@@ -78,6 +78,36 @@ class InternalEventsHttpTest extends HttpTest {
     }
 
     @Test
+    void aWorkerTokenMeantForAnotherServiceIs403AndGrantsNoSticker() throws Exception {      // docs#158
+        program();
+        UUID eventId = UUID.randomUUID();
+        String body = envelope(eventId, "AppointmentCompleted", clientId, true);
+        long now = java.time.Instant.now().getEpochSecond();
+
+        deliver(serviceBearer("barber-saas-worker", "barber-saas-appointment-api", now, now + 600), body)
+                .andExpect(status().isForbidden());
+        deliver(serviceBearer("barber-saas-worker", null, now, now + 600), body).andExpect(status().isForbidden());
+        http.perform(get("/api/v1/loyalty/cards/me").header("Authorization", bearer(clientId, "CLIENT", shop)))
+                .andExpect(status().isNotFound());                       // no card, so no sticker
+        // The same event with the token meant for loyalty is new: the refused calls recorded nothing.
+        deliver(worker, body).andExpect(status().isOk()).andExpect(jsonPath("$.outcome").value("PROCESSED"));
+        http.perform(get("/api/v1/loyalty/cards/me").header("Authorization", bearer(clientId, "CLIENT", shop)))
+                .andExpect(jsonPath("$.stickersCount").value(1));
+    }
+
+    @Test
+    void anExpiredWorkerTokenOrOneLongerThanSevenDaysIs401() throws Exception {             // docs#158
+        String body = envelope(UUID.randomUUID(), "AppointmentCompleted", clientId, true);
+        long now = java.time.Instant.now().getEpochSecond();
+        String loyalty = "barber-saas-loyalty-api";
+
+        deliver(serviceBearer("barber-saas-worker", loyalty, now - 7200, now - 3600), body).andExpect(status().isUnauthorized());
+        deliver(serviceBearer("barber-saas-worker", loyalty, now, now + 604801), body).andExpect(status().isUnauthorized());
+        deliver(serviceBearer("barber-saas-worker", loyalty, now, now + 31536000), body).andExpect(status().isUnauthorized());
+        deliver(serviceBearer("barber-saas-worker", loyalty, now, now + 604800), body).andExpect(status().isOk());
+    }
+
+    @Test
     void onlyTheWorkersServiceTokenIsAccepted() throws Exception {
         String body = envelope(UUID.randomUUID(), "AppointmentCompleted", clientId, true);
         deliver(bearer("ADMIN_BARBERSHOP", shop), body).andExpect(status().isForbidden());
