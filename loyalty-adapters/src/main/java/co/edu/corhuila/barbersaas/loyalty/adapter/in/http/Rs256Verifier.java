@@ -11,6 +11,8 @@ import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -29,6 +31,8 @@ public class Rs256Verifier {
 
     public static final String ISSUER = "barber-saas-identity-auth-api";
     private static final long LEEWAY_SECONDS = 30;
+    /** A service token lives at most 7 days, so a leaked one stops working within a week (docs#158). */
+    static final long SERVICE_TOKEN_MAX_SECONDS = 7 * 24 * 3600;
 
     private final PublicKey key;
     private final ObjectMapper json = new ObjectMapper();
@@ -75,13 +79,29 @@ public class Rs256Verifier {
                 throw new InvalidTokenException("unknown issuer");
             }
             Caller.Role role = Caller.Role.valueOf(claims.path("role").asText());
+            if (role == Caller.Role.SERVICE && (!claims.path("iat").isNumber()
+                    || claims.get("exp").asLong() - claims.get("iat").asLong() > SERVICE_TOKEN_MAX_SECONDS)) {
+                throw new InvalidTokenException("a service token must live at most 7 days");
+            }
             UUID tenant = claims.path("barbershopId").isTextual()
                     ? UUID.fromString(claims.get("barbershopId").asText()) : null;
-            return new Caller(claims.get("sub").asText(), role, tenant, token);
+            return new Caller(claims.get("sub").asText(), role, tenant, token, audience(claims.path("aud")));
         } catch (InvalidTokenException e) {
             throw e;
         } catch (Exception e) {
             throw new InvalidTokenException("unreadable token");
         }
+    }
+
+    /** {@code aud} as RFC 7519 allows it: one string or an array of strings. */
+    private static Set<String> audience(JsonNode aud) {
+        if (aud.isTextual()) {
+            return Set.of(aud.asText());
+        }
+        Set<String> names = new HashSet<>();
+        if (aud.isArray()) {
+            aud.forEach(n -> names.add(n.asText()));
+        }
+        return names;
     }
 }
